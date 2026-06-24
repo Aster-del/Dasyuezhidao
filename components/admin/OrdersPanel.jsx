@@ -1,0 +1,173 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabaseClient";
+
+const STATUS_LABEL = {
+  pending: "待處理",
+  preparing: "製作中",
+  completed: "已完成",
+  cancelled: "已取消",
+};
+
+const STATUS_FLOW = ["pending", "preparing", "completed"];
+
+const PAYMENT_LABEL = { cash: "現金", transfer: "現場轉帳" };
+
+function playNotifySound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    gain.gain.value = 0.18;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(660, ctx.currentTime + 0.15);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3);
+    osc.stop(ctx.currentTime + 0.45);
+  } catch {
+    // 瀏覽器可能需要使用者先互動過頁面才能播放聲音，失敗就靜默忽略
+  }
+}
+
+export default function OrdersPanel() {
+  const [orders, setOrders] = useState([]);
+  const [filter, setFilter] = useState("pending");
+  const [loading, setLoading] = useState(true);
+  const [flashId, setFlashId] = useState(null);
+
+  async function fetchOrders() {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*, order_items(*, order_item_options(*))")
+      .order("created_at", { ascending: false });
+    if (!error) setOrders(data || []);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    fetchOrders();
+
+    const channel = supabase
+      .channel("orders-realtime")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "orders" },
+        (payload) => {
+          playNotifySound();
+          setFlashId(payload.new.id);
+          // 餐點明細是訂單建立後緊接著寫入的，稍微延遲後重新整理可以一併拿到明細
+          setTimeout(fetchOrders, 700);
+          setTimeout(() => setFlashId(null), 5000);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  async function updateStatus(orderId, status) {
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status } : o)));
+    await supabase.from("orders").update({ status }).eq("id", orderId);
+  }
+
+  const filtered = orders.filter((o) => (filter === "all" ? true : o.status === filter));
+
+  if (loading) return <p className="text-ink/50">載入訂單中…</p>;
+
+  return (
+    <div>
+      <div className="flex gap-2 mb-4 overflow-x-auto">
+        {["pending", "preparing", "completed", "cancelled", "all"].map((key) => (
+          <button
+            key={key}
+            onClick={() => setFilter(key)}
+            className={`px-3 py-1.5 rounded-full text-sm border shrink-0 ${
+              filter === key ? "bg-ink text-cream border-ink" : "border-line text-ink/60"
+            }`}
+          >
+            {key === "all" ? "全部" : STATUS_LABEL[key]}
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 && <p className="text-ink/40 text-sm py-10 text-center">目前沒有符合條件的訂單</p>}
+
+      <div className="space-y-3">
+        {filtered.map((order) => (
+          <div
+            key={order.id}
+            className={`border rounded-card p-4 bg-white transition ${
+              flashId === order.id ? "border-clay ring-2 ring-clay/40" : "border-line"
+            }`}
+          >
+            <div className="flex justify-between items-start mb-2">
+              <div>
+                <p className="font-semibold text-ink">
+                  {order.customer_name} · {order.customer_phone}
+                </p>
+                <p className="text-xs text-ink/50 mt-0.5">
+                  {new Date(order.created_at).toLocaleString("zh-TW")} ·{" "}
+                  {PAYMENT_LABEL[order.payment_method]}
+                </p>
+              </div>
+              <span className="text-sm font-semibold text-clay shrink-0 ml-2">
+                NT$ {Number(order.total_price).toFixed(0)}
+              </span>
+            </div>
+
+            <div className="border-t border-line pt-2 space-y-1.5">
+              {(order.order_items || []).map((item) => (
+                <div key={item.id} className="text-sm">
+                  <p className="text-ink">
+                    {item.dish_name} × {item.quantity}
+                  </p>
+                  {item.order_item_options?.length > 0 && (
+                    <p className="text-ink/50 text-xs">
+                      {item.order_item_options.map((o) => o.choice_label).join("、")}
+                    </p>
+                  )}
+                  {item.note && <p className="text-ink/50 text-xs">備註：{item.note}</p>}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 mt-3 pt-3 border-t border-line">
+              <span className="text-xs text-ink/50 mr-1">狀態</span>
+              {order.status === "cancelled" ? (
+                <span className="text-sm text-ink/40">已取消</span>
+              ) : (
+                STATUS_FLOW.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => updateStatus(order.id, s)}
+                    className={`px-3 py-1 rounded-full text-xs border ${
+                      order.status === s
+                        ? "bg-leaf text-cream border-leaf"
+                        : "border-line text-ink/60"
+                    }`}
+                  >
+                    {STATUS_LABEL[s]}
+                  </button>
+                ))
+              )}
+              {order.status !== "cancelled" && order.status !== "completed" && (
+                <button
+                  onClick={() => updateStatus(order.id, "cancelled")}
+                  className="px-3 py-1 rounded-full text-xs border border-line text-clay/80 ml-auto"
+                >
+                  取消訂單
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
