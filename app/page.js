@@ -15,6 +15,7 @@ export default function CustomerPage() {
   const [loading, setLoading] = useState(true);
 
   const [activeCategoryId, setActiveCategoryId] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [customizingDish, setCustomizingDish] = useState(null);
   const [cart, setCart] = useState([]);
   const [showCart, setShowCart] = useState(false);
@@ -69,10 +70,18 @@ export default function CustomerPage() {
       }));
   }
 
-  const dishesInCategory = useMemo(
-    () => dishes.filter((d) => d.category_id === activeCategoryId),
-    [dishes, activeCategoryId]
-  );
+  // 搜尋模式：跨分類搜尋
+  const isSearching = searchQuery.trim().length > 0;
+
+  const displayedDishes = useMemo(() => {
+    if (isSearching) {
+      return dishes.filter((d) =>
+        d.name.includes(searchQuery.trim()) ||
+        (d.description && d.description.includes(searchQuery.trim()))
+      );
+    }
+    return dishes.filter((d) => d.category_id === activeCategoryId);
+  }, [dishes, activeCategoryId, searchQuery, isSearching]);
 
   function addToCart(item) {
     setCart((prev) => [...prev, item]);
@@ -95,12 +104,19 @@ export default function CustomerPage() {
   }
 
   if (completedOrder) {
+    const orderTypeLabel = {
+      dine_in: `內用（${completedOrder.table_number} 號桌）`,
+      takeout_wait: "外帶（現場等候）",
+      takeout_later: "外帶（稍後取餐）",
+    }[completedOrder.order_type] || "";
+
     return (
       <div className="min-h-screen flex items-center justify-center px-6">
         <div className="text-center max-w-sm">
           <h1 className="font-display text-3xl text-ink mb-2">訂單已送出</h1>
+          <p className="text-ink/60 mb-2">{orderTypeLabel}</p>
           <p className="text-ink/60 mb-6">
-            請至現場以{completedOrder.payment_method === "cash" ? "現金" : "轉帳"}付款，店家準備好餐點後會通知您。
+            請以{completedOrder.payment_method === "cash" ? "現金" : "轉帳"}現場付款，感謝您的光臨！
           </p>
           <button
             onClick={() => setCompletedOrder(null)}
@@ -120,27 +136,48 @@ export default function CustomerPage() {
         <p className="text-cream/60 text-sm mt-1">點選餐點即可客製化內容</p>
       </header>
 
-      <nav className="sticky top-0 z-30 bg-cream border-b border-line overflow-x-auto whitespace-nowrap px-4 py-3 flex gap-2">
-        {categories.map((cat) => (
-          <button
-            key={cat.id}
-            onClick={() => setActiveCategoryId(cat.id)}
-            className={`px-4 py-1.5 rounded-full text-sm shrink-0 border ${
-              activeCategoryId === cat.id
-                ? "bg-ink text-cream border-ink"
-                : "border-line text-ink/70"
-            }`}
-          >
-            {cat.name}
-          </button>
-        ))}
-      </nav>
+      {/* 搜尋欄 */}
+      <div className="px-4 pt-3 pb-1 bg-cream border-b border-line">
+        <input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="搜尋餐點名稱…"
+          className="w-full rounded-full border border-line bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-clay/40"
+        />
+      </div>
+
+      {/* 分類列（搜尋時隱藏） */}
+      {!isSearching && (
+        <nav className="sticky top-0 z-30 bg-cream border-b border-line overflow-x-auto whitespace-nowrap px-4 py-3 flex gap-2">
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => setActiveCategoryId(cat.id)}
+              className={`px-4 py-1.5 rounded-full text-sm shrink-0 border ${
+                activeCategoryId === cat.id
+                  ? "bg-ink text-cream border-ink"
+                  : "border-line text-ink/70"
+              }`}
+            >
+              {cat.name}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {isSearching && (
+        <p className="px-4 pt-3 text-xs text-ink/40">
+          搜尋「{searchQuery}」，共 {displayedDishes.length} 個結果
+        </p>
+      )}
 
       <main className="px-4 py-4 grid gap-3 sm:grid-cols-2">
-        {dishesInCategory.length === 0 && (
-          <p className="text-ink/40 text-sm col-span-full text-center py-10">這個分類目前沒有餐點</p>
+        {displayedDishes.length === 0 && (
+          <p className="text-ink/40 text-sm col-span-full text-center py-10">
+            {isSearching ? "找不到符合的餐點" : "這個分類目前沒有餐點"}
+          </p>
         )}
-        {dishesInCategory.map((dish) => (
+        {displayedDishes.map((dish) => (
           <button
             key={dish.id}
             onClick={() => setCustomizingDish(dish)}
@@ -176,10 +213,7 @@ export default function CustomerPage() {
           items={cart}
           onRemove={removeFromCart}
           onClose={() => setShowCart(false)}
-          onCheckout={() => {
-            setShowCart(false);
-            setShowCheckout(true);
-          }}
+          onCheckout={() => { setShowCart(false); setShowCheckout(true); }}
         />
       )}
 
